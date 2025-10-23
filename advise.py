@@ -41,7 +41,7 @@ GENED_CODES = {
     "AF",
     "FL",
     "HIST",
-    "CAP",
+    "FYE",
     "PSC",
     "SS",
     "MATH",
@@ -67,7 +67,7 @@ REQUIREMENT_LABELS = {
     "HIST": "History",
     "NWC": "Non-Western C&C",
     "WC": "Western C&C",
-    "CAP": "Capstone",
+    "FYE": "First Year Experience",
 }
 
 CLASSICS_LETTERS_PREFIXES = "CLC|GRK|LTRS|LAT|HIST|MLLL|PHIL|RELS|ENGL"
@@ -172,10 +172,16 @@ def hours_summary(
 
 
 def candl(prefix, frame):
-    no_engl_or_hist = frame[~frame.Course.str.contains("ENGL1113|ENGL1213|HIST1483|HIST1493")]
+    no_engl_or_hist = frame[~frame.Course.str.contains("ENGL1113|ENGL1213|EXPO1213|HIST1483|HIST1493")]
     classicsandletters = no_engl_or_hist[no_engl_or_hist.Course.str.contains(CLASSICS_LETTERS_PREFIXES)]
 
     return classicsandletters
+
+def other_courses(prefix, frame):
+    no_engl_or_hist = frame[~frame.Course.str.contains("ENGL1113|ENGL1213|EXPO1213|HIST1483|HIST1493")]
+    other_courses = no_engl_or_hist[~no_engl_or_hist.Course.str.contains(CLASSICS_LETTERS_PREFIXES)]
+
+    return other_courses
 
 
 # -----------------------
@@ -186,6 +192,7 @@ def make_markdown_report(
     gened_data: Dict[str, List[str]],
     hours_data: Dict[str, int],
     candl_df: pd.DataFrame,
+    other_courses_df: pd.DataFrame,
     student_file: str,
     out_dir: str = ".",
 ) -> Path:
@@ -242,9 +249,20 @@ def make_markdown_report(
             )
     else:
         md_lines.append("_No Classics or Letters courses found._")
+    if not other_courses_df.empty:
+        md_lines.append("\n## Other Courses\n")
+        md_lines.append("| Course | Title | Hours | Division |")
+        md_lines.append("|--------|-------|-------|----------|")
+        for _, r in other_courses_df.iterrows():
+            hours_val = int(r["Hours"]) if pd.notna(r["Hours"]) else 0
+            division_val = r.get("Division") or "-"
+            title_val = r.get("Title") or "-"
+            md_lines.append(
+                f"| {r['Course']} | {title_val} | {hours_val} | {division_val} |"
+            )
 
     md_lines.append("\n---\n")
-    md_lines.append("_Generated automatically by the Academic Advising Tool._")
+    md_lines.append("_Generated automatically by Huskey's Academic Advising Tool 🤠._")
 
     out_path.write_text("\n".join(md_lines), encoding="utf-8")
     return out_path
@@ -317,8 +335,9 @@ def main() -> None:
     ge = gened_summary(df)
     hs = hours_summary(df)
     candl_df = candl(args.prefix, df)
+    other_courses_df = other_courses(args.prefix, df)
 
-    md_path = make_markdown_report(df, ge, hs, candl_df, args.file, args.out_dir)
+    md_path = make_markdown_report(df, ge, hs, candl_df, other_courses_df, args.file, args.out_dir)
     if args.format in ("html", "both"):
         html_path = write_html_from_markdown(md_path, args.out_dir)
         print(f"🌐 HTML report saved to: {html_path}")

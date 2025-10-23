@@ -6,6 +6,7 @@ from pathlib import Path
 
 # --- import from your module or paste the functions directly ---
 from advise import (
+    other_courses,
     prepare_df,
     gened_summary,
     hours_summary,
@@ -46,6 +47,7 @@ if uploaded:
     ge = gened_summary(df)
     hs = hours_summary(df)
     candl_df = candl(CLASSICS_LETTERS_PREFIXES, df)
+    other_courses_df = other_courses(CLASSICS_LETTERS_PREFIXES, df)
 
     st.subheader("Credit Hours Summary")
 
@@ -73,12 +75,17 @@ if uploaded:
         candl_df[["Course", "Title", "Hours", "Division"]], width="stretch"
     )
 
+    st.subheader("All Other Courses")
+    st.dataframe(
+        other_courses_df[["Course", "Title", "Hours", "Division"]], width="stretch"
+    )
+
     if st.button("Generate report"):
         # Create Markdown in-memory
         md_path = Path(f"{out_name}.md")
         # Reuse your writer
         tmp = make_markdown_report(
-            df, ge, hs, candl_df, student_file=out_name, out_dir="."
+            df, ge, hs, candl_df, other_courses_df, student_file=out_name, out_dir="."
         )
         # Return as download
         with open(tmp, "rb") as f:
