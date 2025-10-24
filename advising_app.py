@@ -15,6 +15,7 @@ from advise import (
     CLASSICS_LETTERS_PREFIXES,
     REQUIREMENT_LABELS,
     candl,
+    ns_science_groups,
 )
 
 DEFAULT_PREFIX = CLASSICS_LETTERS_PREFIXES
@@ -44,7 +45,9 @@ if uploaded:
     df_raw.columns = ["Number", "Course", "Data"]
 
     df = prepare_df(df_raw)
-    ge = gened_summary(df)
+    ge_detail = gened_summary(df, detailed=True)
+    ge = ge_detail["by_code"]
+    ns = ge_detail["ns_groups"]
     hs = hours_summary(df)
     candl_df = candl(CLASSICS_LETTERS_PREFIXES, df)
     other_courses_df = other_courses(CLASSICS_LETTERS_PREFIXES, df)
@@ -61,14 +64,42 @@ if uploaded:
 
     st.table(hours_df)
 
-
     st.subheader("General Education Coverage")
-    ge_rows = []
+
+    rows = []
+
     for code, label in REQUIREMENT_LABELS.items():
-        courses = ", ".join(ge.get(code, [])) if ge.get(code) else "-"
-        status = "✅" if ge.get(code) else "❌"
-        ge_rows.append({"Requirement": label, "Courses": courses, "Status": status})
-    st.table(pd.DataFrame(ge_rows))
+        if code == "NS":
+            ns_courses = ge.get("NS", [])
+            ns_status = "✅" if ns.get("overall_ok") else "❌"
+            rows.append({
+                "Requirement": label,
+                "Courses": ", ".join(ns_courses) if ns_courses else "-",
+                "Status": ns_status,
+            })
+            # Sub-rows for Biological vs Physical Science
+            rows.append({
+                "Requirement": "↳ Biological Science (BIOL/HES/MBIO/PBIO)",
+                "Courses": ", ".join(ns.get("bio_courses", [])) or "-",
+                "Status": "✅" if ns.get("bio_ok") else "❌",
+            })
+            rows.append({
+                "Requirement": "↳ Physical Science (AGSC/ASTR/CHEM/GEOG/GEOL/GPHY/METR/PHYS)",
+                "Courses": ", ".join(ns.get("phys_courses", [])) or "-",
+                "Status": "✅" if ns.get("phys_ok") else "❌",
+            })
+            continue
+
+        courses = ge.get(code, [])
+        rows.append({
+            "Requirement": label,
+            "Courses": ", ".join(courses) if courses else "-",
+            "Status": "✅" if courses else "❌",
+        })
+
+    # Avoid Arrow dtype issues by keeping everything as strings
+    ge_df = pd.DataFrame(rows).astype({"Requirement": "string", "Courses": "string", "Status": "string"})
+    st.table(ge_df)
 
     st.subheader("Classics & Letters Courses")
     st.dataframe(

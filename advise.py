@@ -47,6 +47,11 @@ GENED_CODES = {
     "MATH",
     "notgened",
 }
+
+# Gen-Ed science subgroups
+BIO_SCI_PREFIXES = ("BIOL", "HES", "MBIO", "PBIO")
+PHYS_SCI_PREFIXES = ("AGSC", "ASTR", "CHEM", "GEOG", "GEOL", "GPHY", "METR", "PHYS")
+
 FLAGS = {"tr", "SR", "old", "JC", "lib", "OSS"}  # add more if you encounter them
 LEVELS = {"ld", "ud"}
 TERM_NAMES = {"Fall", "Spring", "Summer", "Winter"}  # adjust if needed
@@ -80,6 +85,55 @@ def split_parts(s: str) -> list[str]:
     return [p.strip() for p in s.split(",") if p.strip()]
 
 
+def ns_science_groups(df: pd.DataFrame) -> Dict[str, object]:
+    """
+    For rows tagged GenEd == 'NS', split into Biological vs Physical science groups by Dept prefixes.
+    Returns:
+      {
+        'bio_courses':  [...],
+        'phys_courses': [...],
+        'bio_ok': bool,
+        'phys_ok': bool,
+        'overall_ok': bool,  # both groups satisfied
+      }
+    """
+    if "GenEd" not in df or "Dept" not in df:
+        return {
+            "bio_courses": [],
+            "phys_courses": [],
+            "bio_ok": False,
+            "phys_ok": False,
+            "overall_ok": False,
+        }
+
+    ns = df.loc[df["GenEd"] == "NS", ["Course", "Dept"]].copy()
+    if ns.empty:
+        return {
+            "bio_courses": [],
+            "phys_courses": [],
+            "bio_ok": False,
+            "phys_ok": False,
+            "overall_ok": False,
+        }
+
+    bio = ns[ns["Dept"].isin(BIO_SCI_PREFIXES)]
+    phys = ns[ns["Dept"].isin(PHYS_SCI_PREFIXES)]
+
+    bio_courses = list(dict.fromkeys(bio["Course"].tolist()))
+    phys_courses = list(dict.fromkeys(phys["Course"].tolist()))
+
+    bio_ok = len(bio_courses) > 0
+    phys_ok = len(phys_courses) > 0
+
+    return {
+        "Biological Sciences": bio_courses,
+        "Physical Sciences": phys_courses,
+        "bio_ok": bio_ok,
+        "phys_ok": phys_ok,
+        "overall_ok": bio_ok and phys_ok,
+    }
+
+
 # -----------------------
 # Data preparation
 # -----------------------
@@ -99,7 +153,10 @@ def prepare_df(df: pd.DataFrame) -> pd.DataFrame:
         .str.replace(r"\s+", " ", regex=True)
     )
 
-    # --- NEW: extract the comma-separated contents inside parentheses and make a list
+    df["Dept"] = (
+        df["Course"].str.extract(r"^([A-Za-z]+)", expand=False).str.upper().fillna("")
+    )
+
     def extract_list(text):
         """
         Take a string like "( 3, 2016Sp, B, Spring, SR, ld, AF, Understanding The Theatre )"
@@ -133,27 +190,54 @@ def prepare_df(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # Reorder columns for clarity
-    cols = ["Number", "Course", "Title", "Hours", "Division", "GenEd", "Items"]
+    cols = [
+        "Number",
+        "Course",
+        "Dept",
+        "Title",
+        "Hours",
+        "Division",
+        "GenEd",
+        "Items",
+    ]
     return df[cols].copy()
 
 
 # -----------------------
 # Summaries (pure functions that RETURN data)
 # -----------------------
-def gened_summary(df: pd.DataFrame) -> Dict[str, List[str]]:
+def gened_summary(df: pd.DataFrame, detailed: bool = False) -> Dict[str, Any]:
     """
     Map each Gen-Ed code to a de-duplicated, order-preserving list of courses.
-    Assumes df['GenEd'] holds a single code (or None) per row.
+    If detailed=True, also include NS subgroup coverage:
+      {
+        'by_code': { 'EN1': [...], 'NS': [...], ... },
+        'ns_groups': {
+            'bio_courses': [...],
+            'phys_courses': [...],
+            'bio_ok': bool,
+            'phys_ok': bool,
+            'overall_ok': bool
+        }
+      }
+    Otherwise (detailed=False), returns {code: [courses]} for backward compatibility.
     """
     tmp = df.loc[df["GenEd"].notna(), ["GenEd", "Course"]]
     courses_by_code = (
         tmp.groupby("GenEd")["Course"].agg(lambda s: list(dict.fromkeys(s))).to_dict()
     )
-    # Ensure all codes are present in the result (even if empty)
+
     all_codes = (
         REQUIREMENT_LABELS.keys() if "REQUIREMENT_LABELS" in globals() else GENED_CODES
     )
-    return {code: courses_by_code.get(code, []) for code in all_codes}
+    by_code = {code: courses_by_code.get(code, []) for code in all_codes}
+
+    if not detailed:
+        return by_code
+
+    # Attach NS subgroup breakdown
+    ns = ns_science_groups(df)  # uses Dept prefixes you already defined
+    return {"by_code": by_code, "ns_groups": ns}
 
 
 def hours_summary(
@@ -195,6 +279,7 @@ def make_markdown_report(
     other_courses_df: pd.DataFrame,
     student_file: str,
     out_dir: str = ".",
+    ns_groups: Dict[str, object] | None = None,
 ) -> Path:
     """
     Write a Markdown report summarizing advising data.
@@ -204,28 +289,59 @@ def make_markdown_report(
       - hours_data is a dict with keys: total, total_remaining, lower, upper, upper_remaining
       - candl_df is a filtered subset of df for Classics/Letters
       - REQUIREMENT_LABELS is a dict mapping GenEdCode -> human-readable label
-    Returns:
-      Path to the generated .md file
     """
     out_path = Path(out_dir) / f"{Path(student_file).stem}_report.md"
     md_lines: List[str] = []
 
+    if ns_groups is None:
+        ns_groups = ns_science_groups(df)
+
     # Header
     md_lines.append(f"# Academic Advising Report for `{Path(student_file).stem}`\n")
 
-    # General Education
+    # =========================
+    # General Education section
+    # =========================
     md_lines.append("## General Education Requirements\n")
     md_lines.append("| Requirement | Courses | Status |")
     md_lines.append("|-------------|---------|--------|")
+
     for code, label in REQUIREMENT_LABELS.items():
+        if code == "NS":
+            ns = ns_groups
+            ns_courses = list(dict.fromkeys((gened_data.get("NS") or [])))
+            ns_status = "✅ Satisfied" if ns.get("overall_ok") else "❌ Not satisfied"
+            course_text = ", ".join(ns_courses) if ns_courses else "-"
+            md_lines.append(f"| {label} | {course_text} | {ns_status} |")
+
+            # two sub-rows inside the same table
+            bio_status = "✅" if ns.get("bio_ok") else "❌"
+            phys_status = "✅" if ns.get("phys_ok") else "❌"
+            bio_list = ", ".join(ns.get("bio_courses", [])) or "-"
+            phys_list = ", ".join(ns.get("phys_courses", [])) or "-"
+            md_lines.append(
+                "| ↳ Biological Science (BIOL/HES/MBIO/PBIO) | "
+                + bio_list
+                + f" | {bio_status} |"
+            )
+            md_lines.append(
+                "| ↳ Physical Science (AGSC/ASTR/CHEM/GEOG/GEOL/GPHY/METR/PHYS) | "
+                + phys_list
+                + f" | {phys_status} |"
+            )
+            continue
+
         courses = gened_data.get(code, [])
         status = "✅ Satisfied" if courses else "❌ Not satisfied"
         course_text = ", ".join(courses) if courses else "-"
         md_lines.append(f"| {label} | {course_text} | {status} |")
-    md_lines.append("")
 
-    # Hours Summary
-    hs = hours_data  # just a local alias for readability
+    md_lines.append("")  # <-- blank line to end the table in Markdown
+
+    # =====================
+    # Hours Summary section
+    # =====================
+    hs = hours_data
     md_lines.append("## Credit Hours Summary")
     md_lines.append("| Category | Hours | Remaining |")
     md_lines.append("|----------|-------|-----------|")
@@ -234,9 +350,13 @@ def make_markdown_report(
     md_lines.append(f"| Upper Division | {hs['upper']} | {hs['upper_remaining']} |")
     md_lines.append("")
 
-    # Classics and Letters
+    # ================================
+    # Classics and Letters section
+    # ================================
     md_lines.append("## Classics and Letters Courses")
-    md_lines.append("*These are courses that count toward emphases in Classics or Letters*.\n")
+    md_lines.append(
+        "*These are courses that count toward emphases in Classics or Letters.*\n"
+    )
     if not candl_df.empty:
         md_lines.append("| Course | Title | Hours | Division |")
         md_lines.append("|--------|-------|-------|----------|")
@@ -249,7 +369,11 @@ def make_markdown_report(
             )
     else:
         md_lines.append("_No Classics or Letters courses found._")
-    if not other_courses_df.empty:
+
+    # =====================
+    # Other courses section
+    # =====================
+    if other_courses_df is not None and not other_courses_df.empty:
         md_lines.append("\n## Other Courses\n")
         md_lines.append("| Course | Title | Hours | Division |")
         md_lines.append("|--------|-------|-------|----------|")
@@ -261,6 +385,7 @@ def make_markdown_report(
                 f"| {r['Course']} | {title_val} | {hours_val} | {division_val} |"
             )
 
+    # Footer
     md_lines.append("\n---\n")
     md_lines.append("_Generated automatically by Huskey's Academic Advising Tool 🤠._")
 
@@ -333,11 +458,12 @@ def main() -> None:
 
     df = prepare_df(df_raw)
     ge = gened_summary(df)
+    ns_science = ns_science_groups(df)
     hs = hours_summary(df)
     candl_df = candl(args.prefix, df)
     other_courses_df = other_courses(args.prefix, df)
 
-    md_path = make_markdown_report(df, ge, hs, candl_df, other_courses_df, args.file, args.out_dir)
+    md_path = make_markdown_report(df, ge, ns_science, hs, candl_df, other_courses_df, args.file, args.out_dir)
     if args.format in ("html", "both"):
         html_path = write_html_from_markdown(md_path, args.out_dir)
         print(f"🌐 HTML report saved to: {html_path}")
