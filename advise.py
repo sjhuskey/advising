@@ -240,6 +240,85 @@ def gened_summary(df: pd.DataFrame, detailed: bool = False) -> Dict[str, Any]:
     return {"by_code": by_code, "ns_groups": ns}
 
 
+def ns_science_groups_including_lab(df: pd.DataFrame) -> Dict[str, object]:
+    """
+    Science requirement validator:
+      - Eligible courses are GenEd == 'NS' or 'NSL'
+      - Must have at least one Biological science (by dept prefix)
+      - Must have at least one Physical science (by dept prefix)
+      - Must have at least one lab (NSL) among those sciences (either side)
+    Returns a dict with course lists and boolean flags.
+    """
+
+    def dedup(seq: List[str]) -> List[str]:
+        return list(dict.fromkeys(seq))
+
+    # Make sure we have the columns we need
+    required_cols = {"Course", "GenEd"}
+    if not required_cols.issubset(df.columns):
+        return {
+            "all_ns_courses": [],
+            "bio_courses": [],
+            "phys_courses": [],
+            "lab_courses": [],
+            "bio_ok": False,
+            "phys_ok": False,
+            "lab_ok": False,
+            "overall_ok": False,
+        }
+
+    # Select eligible science rows
+    eligible_cols = ["Course", "GenEd"] + (["Dept"] if "Dept" in df.columns else [])
+    eligible = df.loc[df["GenEd"].isin(["NS", "NSL"]), eligible_cols].copy()
+
+    if eligible.empty:
+        return {
+            "all_ns_courses": [],
+            "bio_courses": [],
+            "phys_courses": [],
+            "lab_courses": [],
+            "bio_ok": False,
+            "phys_ok": False,
+            "lab_ok": False,
+            "overall_ok": False,
+        }
+
+    # Ensure Dept is present
+    if "Dept" not in eligible.columns or eligible["Dept"].isna().any():
+        eligible["Dept"] = (
+            eligible["Course"]
+            .astype(str)
+            .str.extract(r"^([A-Za-z]+)", expand=False)
+            .str.upper()
+        )
+
+    # Build groups
+    bio_courses = dedup(
+        eligible.loc[eligible["Dept"].isin(BIO_SCI_PREFIXES), "Course"].tolist()
+    )
+    phys_courses = dedup(
+        eligible.loc[eligible["Dept"].isin(PHYS_SCI_PREFIXES), "Course"].tolist()
+    )
+    lab_courses = dedup(eligible.loc[eligible["GenEd"].eq("NSL"), "Course"].tolist())
+    all_ns_courses = dedup(eligible["Course"].tolist())
+
+    bio_ok = len(bio_courses) > 0
+    phys_ok = len(phys_courses) > 0
+    lab_ok = len(lab_courses) > 0
+    overall_ok = bio_ok and phys_ok and lab_ok
+
+    return {
+        "all_ns_courses": all_ns_courses,
+        "bio_courses": bio_courses,
+        "phys_courses": phys_courses,
+        "lab_courses": lab_courses,
+        "bio_ok": bio_ok,
+        "phys_ok": phys_ok,
+        "lab_ok": lab_ok,
+        "overall_ok": overall_ok,
+    }
+
+
 def hours_summary(
     df: pd.DataFrame, upper_required: int = 48, total_required: int = 120
 ) -> dict:
@@ -308,33 +387,32 @@ def make_markdown_report(
 
     for code, label in REQUIREMENT_LABELS.items():
         if code == "NS":
-            ns = ns_groups
-            ns_courses = list(dict.fromkeys((gened_data.get("NS") or [])))
-            ns_status = "✅ Satisfied" if ns.get("overall_ok") else "❌ Not satisfied"
-            course_text = ", ".join(ns_courses) if ns_courses else "-"
-            md_lines.append(f"| {label} | {course_text} | {ns_status} |")
+            ns = ns_science_groups_including_lab(df)  # <-- CAPTURE the return
 
-            # two sub-rows inside the same table
-            bio_status = "✅" if ns.get("bio_ok") else "❌"
-            phys_status = "✅" if ns.get("phys_ok") else "❌"
-            bio_list = ", ".join(ns.get("bio_courses", [])) or "-"
-            phys_list = ", ".join(ns.get("phys_courses", [])) or "-"
+            ns_status = "✅ Satisfied" if ns["overall_ok"] else "❌ Not satisfied"
+            course_text = ", ".join(ns["all_ns_courses"]) if ns["all_ns_courses"] else "-"
+
+            md_lines.append(f"| {label} | {course_text} | {ns_status} |")
             md_lines.append(
-                "| ↳ Biological Science (BIOL/HES/MBIO/PBIO) | "
-                + bio_list
-                + f" | {bio_status} |"
+                f"| ↳ Biological Science (BIOL/HES/MBIO/PBIO) | "
+                f"{', '.join(ns['bio_courses']) if ns['bio_courses'] else '-'} | "
+                f"{'✅' if ns['bio_ok'] else '❌'} |"
             )
             md_lines.append(
-                "| ↳ Physical Science (AGSC/ASTR/CHEM/GEOG/GEOL/GPHY/METR/PHYS) | "
-                + phys_list
-                + f" | {phys_status} |"
+                f"| ↳ Physical Science (AGSC/ASTR/CHEM/GEOG/GEOL/GPHY/METR/PHYS) | "
+                f"{', '.join(ns['phys_courses']) if ns['phys_courses'] else '-'} | "
+                f"{'✅' if ns['phys_ok'] else '❌'} |"
+            )
+            md_lines.append(
+                f"| ↳ Lab Requirement (NSL) | "
+                f"{', '.join(ns['lab_courses']) if ns['lab_courses'] else '-'} | "
+                f"{'✅' if ns['lab_ok'] else '❌'} |"
             )
             continue
+        # Skip NSL as it's handled above
+        if code == "NSL":
+            continue
 
-        courses = gened_data.get(code, [])
-        status = "✅ Satisfied" if courses else "❌ Not satisfied"
-        course_text = ", ".join(courses) if courses else "-"
-        md_lines.append(f"| {label} | {course_text} | {status} |")
 
     md_lines.append("")  # <-- blank line to end the table in Markdown
 

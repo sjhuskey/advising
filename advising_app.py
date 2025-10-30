@@ -15,7 +15,7 @@ from advise import (
     CLASSICS_LETTERS_PREFIXES,
     REQUIREMENT_LABELS,
     candl,
-    ns_science_groups,
+    ns_science_groups_including_lab,
 )
 
 DEFAULT_PREFIX = CLASSICS_LETTERS_PREFIXES
@@ -70,24 +70,31 @@ if uploaded:
 
     for code, label in REQUIREMENT_LABELS.items():
         if code == "NS":
-            ns_courses = ge.get("NS", [])
-            ns_status = "✅" if ns.get("overall_ok") else "❌"
+            ns = ns_science_groups_including_lab(df)  # <-- CAPTURE the return
+
             rows.append({
                 "Requirement": label,
-                "Courses": ", ".join(ns_courses) if ns_courses else "-",
-                "Status": ns_status,
+                "Courses": ", ".join(ns["all_ns_courses"]) if ns["all_ns_courses"] else "-",
+                "Status": "✅" if ns["overall_ok"] else "❌",
             })
-            # Sub-rows for Biological vs Physical Science
             rows.append({
                 "Requirement": "↳ Biological Science (BIOL/HES/MBIO/PBIO)",
-                "Courses": ", ".join(ns.get("bio_courses", [])) or "-",
-                "Status": "✅" if ns.get("bio_ok") else "❌",
+                "Courses": ", ".join(ns["bio_courses"]) if ns["bio_courses"] else "-",
+                "Status": "✅" if ns["bio_ok"] else "❌",
             })
             rows.append({
                 "Requirement": "↳ Physical Science (AGSC/ASTR/CHEM/GEOG/GEOL/GPHY/METR/PHYS)",
-                "Courses": ", ".join(ns.get("phys_courses", [])) or "-",
-                "Status": "✅" if ns.get("phys_ok") else "❌",
+                "Courses": ", ".join(ns["phys_courses"]) if ns["phys_courses"] else "-",
+                "Status": "✅" if ns["phys_ok"] else "❌",
             })
+            rows.append({
+                "Requirement": "↳ Lab Requirement (NSL)",
+                "Courses": ", ".join(ns["lab_courses"]) if ns["lab_courses"] else "-",
+                "Status": "✅" if ns["lab_ok"] else "❌",
+            })
+            continue
+        # Now, skip NSL as it's handled above
+        if code == "NSL":
             continue
 
         courses = ge.get(code, [])

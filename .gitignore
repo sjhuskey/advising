@@ -1,6 +1,15 @@
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Advisees directory
+advisees/
+
+# Test files
+student_report_report.html
+student_report_report.md
+test.tsv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
